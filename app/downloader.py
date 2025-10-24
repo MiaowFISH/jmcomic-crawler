@@ -6,8 +6,20 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
-
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    Any,
+    Callable,
+    Dict,
+    Optional,
+)
+from jmcomic import JmAlbumDetail, JmDownloader
+from jmcomic.jm_option import JmImageDetail
 import img2pdf
 import pyzipper
 from PIL import Image
@@ -18,7 +30,6 @@ from jmcomic import (
     create_option_by_str,
 )
 from .config import AppConfig
-from .custom_downloader import CustomJmDownloader
 
 
 @dataclass
@@ -39,6 +50,97 @@ class DownloadResult:
     artifact_path: Path
     suffix: str
     metadata: Dict[str, Any]
+
+
+class CustomJmDownloader(JmDownloader):
+    """
+    Extend JmDownloader to intercept before_album and surface album metadata
+    to a callback for task progress/state updates.
+    """
+
+    def __init__(
+        self,
+        *args,
+        on_album_meta: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_image_event: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.on_album_meta = on_album_meta
+        # on_image_event(stage, info): stage in {"before", "after"}
+        # info keys may include album_id, image_id, page, url, path, filename
+        self.on_image_event = on_image_event
+
+    def before_album(self, album: JmAlbumDetail):
+        try:
+            meta: Dict[str, Any] = {
+                "album_id": getattr(album, "album_id", getattr(album, "id", None)),
+                "title": getattr(album, "name", getattr(album, "title", None)),
+            }
+            # authors and tags
+            authors = getattr(album, "author", None) or getattr(album, "authors", None)
+            if authors is not None:
+                meta["authors"] = authors if isinstance(authors, list) else [authors]
+            tags = getattr(album, "tags", None)
+            if tags is not None:
+                meta["tags"] = list(tags) if not isinstance(tags, str) else [tags]
+            # chapter count if iterable
+            try:
+                meta["chapter_count"] = sum(1 for _ in album)
+            except Exception:
+                pass
+            if self.on_album_meta:
+                self.on_album_meta(meta)
+        except Exception:
+            pass
+        return super().before_album(album)
+
+    def before_image(self, image: JmImageDetail, img_save_path):
+        try:
+            if self.on_image_event:
+                info: Dict[str, Any] = {
+                    "album_id": getattr(image, "album_id", getattr(image, "aid", None)),
+                    "image_id": getattr(
+                        image,
+                        "image_id",
+                        getattr(image, "pid", getattr(image, "id", None)),
+                    ),
+                    "page": getattr(image, "page", getattr(image, "index", None)),
+                    "url": getattr(image, "img_url", None),
+                    "path": str(img_save_path),
+                }
+                try:
+                    info["filename"] = Path(str(img_save_path)).name
+                except Exception:
+                    pass
+                self.on_image_event("before", info)
+        except Exception:
+            pass
+        return super().before_image(image, img_save_path)
+
+    def after_image(self, image: JmImageDetail, img_save_path):
+        ret = super().after_image(image, img_save_path)
+        try:
+            if self.on_image_event:
+                info: Dict[str, Any] = {
+                    "album_id": getattr(image, "album_id", getattr(image, "aid", None)),
+                    "image_id": getattr(
+                        image,
+                        "image_id",
+                        getattr(image, "pid", getattr(image, "id", None)),
+                    ),
+                    "page": getattr(image, "page", getattr(image, "index", None)),
+                    "url": getattr(image, "img_url", None),
+                    "path": str(img_save_path),
+                }
+                try:
+                    info["filename"] = Path(str(img_save_path)).name
+                except Exception:
+                    pass
+                self.on_image_event("after", info)
+        except Exception:
+            pass
+        return ret
 
 
 class Downloader:
@@ -87,13 +189,21 @@ class Downloader:
                     "image": {"decode": True, "suffix": None},
                     "threading": {"image": 16, "photo": 8},
                 },
-                "dir_rule": {"base_dir": f"{task_work.as_posix()}/", "rule": "Bd / Aname / Ptitle"},
+                "dir_rule": {
+                    "base_dir": f"{task_work.as_posix()}/",
+                    "rule": "Bd / Aname / Ptitle",
+                },
             }
 
         import yaml as _yaml
-        return create_option_by_str(_yaml.safe_dump(yml_dict, allow_unicode=True, sort_keys=False))
 
-    def _prefetch_metadata(self, op: JmOption, album_id: Union[int, str]) -> Dict[str, Any]:
+        return create_option_by_str(
+            _yaml.safe_dump(yml_dict, allow_unicode=True, sort_keys=False)
+        )
+
+    def _prefetch_metadata(
+        self, op: JmOption, album_id: Union[int, str]
+    ) -> Dict[str, Any]:
         meta: Dict[str, Any] = {}
         try:
             cl = op.new_jm_client()
@@ -128,7 +238,9 @@ class Downloader:
         images.sort()
         return images
 
-    def _reencode_images(self, images: List[Path], quality: int, staging: Path) -> List[Path]:
+    def _reencode_images(
+        self, images: List[Path], quality: int, staging: Path
+    ) -> List[Path]:
         staging.mkdir(parents=True, exist_ok=True)
         out: List[Path] = []
         for idx, src in enumerate(images, start=1):
@@ -145,7 +257,9 @@ class Downloader:
                 out.append(dst)
         return out
 
-    def _make_zip(self, images_root: Path, output: Path, password: Optional[str], compression: int) -> Path:
+    def _make_zip(
+        self, images_root: Path, output: Path, password: Optional[str], compression: int
+    ) -> Path:
         output.parent.mkdir(parents=True, exist_ok=True)
         comp = pyzipper.ZIP_LZMA if compression >= 7 else pyzipper.ZIP_DEFLATED
         with pyzipper.AESZipFile(output, "w", compression=comp) as zf:
@@ -160,7 +274,9 @@ class Downloader:
                     zf.write(fp, arc)
         return output
 
-    def _make_pdf(self, images: List[Path], output: Path, password: Optional[str]) -> Path:
+    def _make_pdf(
+        self, images: List[Path], output: Path, password: Optional[str]
+    ) -> Path:
         output.parent.mkdir(parents=True, exist_ok=True)
         # Build PDF from images
         img_bytes = [p.read_bytes() for p in images]
@@ -188,7 +304,9 @@ class Downloader:
                 tmp.unlink(missing_ok=True)  # type: ignore[arg-type]
         return output
 
-    def download_and_package(self, params: DownloadParams, progress_cb=None) -> DownloadResult:
+    def download_and_package(
+        self, params: DownloadParams, progress_cb=None
+    ) -> DownloadResult:
         task_work = self.work_dir
         task_work.mkdir(parents=True, exist_ok=True)
 
@@ -203,18 +321,27 @@ class Downloader:
             if progress_cb:
                 progress_cb(0.1, f"meta {meta.get('album_id')}")
 
-        jd = CustomJmDownloader(op, on_album_meta=on_album_meta)
+        def on_image_event(stage: str, info: Dict[str, Any]) -> None:
+            if progress_cb:
+                progress_cb(0.2, f"image {stage} {info.get('image_id')}")
+
+        jd = CustomJmDownloader(
+            op, on_album_meta=on_album_meta, on_image_event=on_image_event
+        )
 
         # Download each album to the task_work directory using downloader
         for idx, aid in enumerate(album_ids, start=1):
             if progress_cb:
-                progress_cb(0.05 + 0.4 * idx / max(1, len(album_ids)), f"download {aid}")
+                progress_cb(
+                    0.05 + 0.4 * idx / max(1, len(album_ids)), f"download {aid}"
+                )
             # Prefer JmDownloader API; fall back to function if necessary
             try:
                 jd.download_album(aid)  # type: ignore[attr-defined]
             except Exception:
                 # Fallback: library-level function
                 from jmcomic import download_album as _download_album
+
                 _download_album(aid, op)
 
         # Collect all images under the task work dir (could be nested)
@@ -238,14 +365,23 @@ class Downloader:
             out = task_work / f"{base_name}.zip"
             if progress_cb:
                 progress_cb(0.75, "zip")
-            self._make_zip(src_root, out, params.password if params.encrypt else None, params.compression)
+            self._make_zip(
+                src_root,
+                out,
+                params.password if params.encrypt else None,
+                params.compression,
+            )
             suffix = "zip"
             artifact = out
         else:
             out = task_work / f"{base_name}.pdf"
             if progress_cb:
                 progress_cb(0.75, "pdf")
-            img_list = images if src_root == task_work / "_reencoded" else self._collect_images(task_work)
+            img_list = (
+                images
+                if src_root == task_work / "_reencoded"
+                else self._collect_images(task_work)
+            )
             self._make_pdf(img_list, out, params.password if params.encrypt else None)
             suffix = "pdf"
             artifact = out
@@ -254,4 +390,9 @@ class Downloader:
             progress_cb(0.95, "finalize")
 
         # Best-effort cleanup of staging directory (keep originals for debug)
-        return DownloadResult(album_ids=album_ids, artifact_path=artifact, suffix=suffix, metadata=all_meta)
+        return DownloadResult(
+            album_ids=album_ids,
+            artifact_path=artifact,
+            suffix=suffix,
+            metadata=all_meta,
+        )
