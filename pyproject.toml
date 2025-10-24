@@ -1,0 +1,44 @@
+[project]
+name = "jmcomic-crawler-server"
+version = "0.1.0"
+description = "A server to download comics from jmcomic."
+authors = [
+    {name = "GitHub Copilot", email = "copilot@github.com"},
+]
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "jmcomic>=2.6.9",
+    "fastapi>=0.104.1",
+    "uvicorn[standard]>=0.24.0",
+    "pyyaml>=6.0.1",
+    "aiofiles>=23.2.1",
+    "python-multipart>=0.0.6",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.1",
+    "pillow>=10.3.0",
+    "img2pdf>=0.5.1",
+    "pyzipper>=0.3.6",
+    "pikepdf>=9.2.0",
+    "fastmcp>=0.4.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+start = "app.main:start"
+mcp = "app.mcp_fast:start_mcp"
+
+[[tool.uv.index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+
+[tool.uv.workspace]
+members = [
+    "py",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
