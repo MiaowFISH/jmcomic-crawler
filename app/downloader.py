@@ -5,6 +5,7 @@ import os
 import shutil
 import time
 from dataclasses import dataclass
+import threading
 from pathlib import Path
 from typing import (
     Any,
@@ -144,9 +145,23 @@ class CustomJmDownloader(JmDownloader):
 
 
 class Downloader:
+    # Ensure at most one concurrent download per album within this process
+    _album_locks: Dict[str, threading.Lock] = {}
+
     def __init__(self, work_dir: Path, app_cfg: Optional[AppConfig] = None) -> None:
         self.work_dir = work_dir
         self.app_cfg = app_cfg
+
+    def _get_album_lock(self, album_id: str) -> threading.Lock:
+        # Double-checked locking for creating per-album locks
+        lock = self._album_locks.get(album_id)
+        if lock is None:
+            with threading.Lock():
+                lock = self._album_locks.get(album_id)
+                if lock is None:
+                    lock = threading.Lock()
+                    self._album_locks[album_id] = lock
+        return lock
 
     def _build_option(self, params: DownloadParams, task_work: Path) -> JmOption:
         # Highest priority: provided option file
@@ -309,8 +324,15 @@ class Downloader:
     ) -> DownloadResult:
         task_work = self.work_dir
         task_work.mkdir(parents=True, exist_ok=True)
+        # Use a shared base dir for downloads to maximize cache hits across tasks
+        dl_base = (
+            self.app_cfg.server.cache_dir / "work"
+            if self.app_cfg is not None
+            else task_work
+        )
+        dl_base.mkdir(parents=True, exist_ok=True)
 
-        op = self._build_option(params, task_work)
+        op = self._build_option(params, dl_base)
         album_ids = [str(a) for a in params.album_ids]
 
         all_meta: Dict[str, Any] = {"albums": []}
@@ -321,36 +343,63 @@ class Downloader:
             if progress_cb:
                 progress_cb(0.1, f"meta {meta.get('album_id')}")
 
+        # Collect images per album for packaging without re-scanning dirs
+        images_by_album: Dict[str, List[Dict[str, Any]]] = {}
+
         def on_image_event(stage: str, info: Dict[str, Any]) -> None:
-            if progress_cb:
+            aid = str(info.get("album_id") or "")
+            if not aid:
+                return
+            if stage == "after":
+                lst = images_by_album.setdefault(aid, [])
+                lst.append(
+                    {
+                        "path": Path(info.get("path", "")),
+                        "page": info.get("page"),
+                        "filename": info.get("filename"),
+                    }
+                )
+            if progress_cb and info.get("image_id") is not None:
                 progress_cb(0.2, f"image {stage} {info.get('image_id')}")
 
         jd = CustomJmDownloader(
             op, on_album_meta=on_album_meta, on_image_event=on_image_event
         )
 
-        # Download each album to the task_work directory using downloader
+        # Download each album to the shared base directory using downloader
         for idx, aid in enumerate(album_ids, start=1):
             if progress_cb:
                 progress_cb(
                     0.05 + 0.4 * idx / max(1, len(album_ids)), f"download {aid}"
                 )
             # Prefer JmDownloader API; fall back to function if necessary
-            try:
-                jd.download_album(aid)  # type: ignore[attr-defined]
-            except Exception:
-                # Fallback: library-level function
-                from jmcomic import download_album as _download_album
+            lock = self._get_album_lock(aid)
+            with lock:
+                try:
+                    jd.download_album(aid)  # type: ignore[attr-defined]
+                except Exception:
+                    # Fallback: library-level function
+                    from jmcomic import download_album as _download_album
 
-                _download_album(aid, op)
+                    _download_album(aid, op)
 
-        # Collect all images under the task work dir (could be nested)
+        # Build ordered image list from callbacks (fallback to directory scan if empty)
         if progress_cb:
             progress_cb(0.5, "collect images")
-        images = self._collect_images(task_work)
+        selected: List[Path] = []
+        for aid in album_ids:
+            items = images_by_album.get(aid, [])
+            # Order by page if available; else by filename
+            items.sort(key=lambda x: (x.get("page") is None, x.get("page") or 0, str(x.get("filename") or x.get("path"))))
+            selected.extend([Path(it["path"]) for it in items if it.get("path")])
+        if not selected:
+            # Fallback: scan the shared base dir limited by album_ids heuristically
+            # As a safe fallback, scan entire dl_base (may be slower once per cold start)
+            selected = self._collect_images(dl_base)
 
         # Optionally re-encode for quality
-        src_root = task_work
+        src_root = None  # When None, we will use per-file list
+        images = selected
         if params.quality is not None:
             if progress_cb:
                 progress_cb(0.55, f"re-encode quality={params.quality}")
@@ -365,23 +414,55 @@ class Downloader:
             out = task_work / f"{base_name}.zip"
             if progress_cb:
                 progress_cb(0.75, "zip")
-            self._make_zip(
-                src_root,
-                out,
-                params.password if params.encrypt else None,
-                params.compression,
-            )
+            if src_root is not None:
+                # We have a prepared directory (re-encoded); zip the tree
+                self._make_zip(
+                    src_root,
+                    out,
+                    params.password if params.encrypt else None,
+                    params.compression,
+                )
+            else:
+                # Create a lightweight staging with hardlinks to avoid copying
+                stage = task_work / "_pack_stage"
+                # Clean and recreate
+                if stage.exists():
+                    shutil.rmtree(stage, ignore_errors=True)
+                stage.mkdir(parents=True, exist_ok=True)
+                # Group by album id into subfolders for readability
+                index = 1
+                for aid in album_ids:
+                    sub = stage / f"album_{aid}"
+                    sub.mkdir(parents=True, exist_ok=True)
+                    for it in images_by_album.get(aid, []):
+                        p = it.get("path")
+                        if not p:
+                            continue
+                        src = Path(p)
+                        if not src.exists():
+                            continue
+                        # Ensure unique sequential names to preserve order
+                        dst = sub / f"{index:05d}_{Path(it.get('filename') or src.name).name}"
+                        try:
+                            os.link(src, dst)
+                        except Exception:
+                            shutil.copy2(src, dst)
+                        index += 1
+                self._make_zip(
+                    stage,
+                    out,
+                    params.password if params.encrypt else None,
+                    params.compression,
+                )
+                # Cleanup packing stage
+                shutil.rmtree(stage, ignore_errors=True)
             suffix = "zip"
             artifact = out
         else:
             out = task_work / f"{base_name}.pdf"
             if progress_cb:
                 progress_cb(0.75, "pdf")
-            img_list = (
-                images
-                if src_root == task_work / "_reencoded"
-                else self._collect_images(task_work)
-            )
+            img_list = images
             self._make_pdf(img_list, out, params.password if params.encrypt else None)
             suffix = "pdf"
             artifact = out
