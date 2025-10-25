@@ -562,6 +562,9 @@ class TaskManager:
             for fn in files:
                 if fn.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
                     imgs.append(Path(root) / fn)
+
+        # sort by filename (usually like p001.jpg, p002.jpg, ...)
+        imgs.sort(key=lambda x: x.name)
         return imgs
 
     def _build_artifact(self, album_id: str, req: TaskRequest, cache_hash: str) -> str:
