@@ -18,7 +18,7 @@ COPY config.yml ./config.yml
 COPY README.md server.md ./
 
 # 暴露服务端口（默认 8000，可由 config.yml 覆盖）
-EXPOSE 8000
+EXPOSE 7210
 
 # 运行 FastAPI 服务（pyproject.scripts: start = "app.main:start"）
 CMD ["uv", "run", "start"]
