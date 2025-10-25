@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # 使用官方 uv 基础镜像（内置 Python 与 uv）
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+FROM ghcr.nju.edu.cn/astral-sh/uv:python3.12-bookworm
 
 # 工作目录
 WORKDIR /app
