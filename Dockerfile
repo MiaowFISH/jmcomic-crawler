@@ -13,7 +13,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # 复制项目源码与配置
-COPY app ./app
+COPY src ./src
 COPY config.yml ./config.yml
 COPY README.md server.md ./
 

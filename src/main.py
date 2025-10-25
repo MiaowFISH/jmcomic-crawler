@@ -696,7 +696,7 @@ def start():
     import uvicorn
     host = SERVER_CFG.get("host", "0.0.0.0")
     port = int(SERVER_CFG.get("port", 8000))
-    uvicorn.run("app.main:app", host=host, port=port, reload=False)
+    uvicorn.run("src.main:app", host=host, port=port, reload=False)
 
 # Password generation policy driven by config (SERVER_CFG["password"])
 def get_password_policy():

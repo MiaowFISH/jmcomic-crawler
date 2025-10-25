@@ -18,11 +18,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-start = "app.main:start"
+start = "src.main:start"
 
 [[tool.uv.index]]
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
 default = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["src"]
