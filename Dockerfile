@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # 使用官方 uv 基础镜像（内置 Python 与 uv）
-FROM ghcr.nju.edu.cn/astral-sh/uv:python3.12-bookworm
+FROM ghcr.nju.edu.cn/astral-sh/uv:python3.13-alpine
 
 # 工作目录
 WORKDIR /app
@@ -19,6 +19,14 @@ COPY README.md server.md ./
 
 # 暴露服务端口（默认 8000，可由 config.yml 覆盖）
 EXPOSE 7210
+
+# 清理文件，减小镜像体积
+# 清理 uv 缓存
+RUN uv clean
+# 清理 pip 缓存
+RUN rm -rf /root/.cache/pip
+# 清理 apk 缓存
+RUN rm -rf /var/cache/apk/*
 
 # 运行 FastAPI 服务（pyproject.scripts: start = "app.main:start"）
 CMD ["uv", "run", "start"]

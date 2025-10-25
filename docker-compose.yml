@@ -1,5 +1,3 @@
-# Docker Compose for JMComic server
-version: "3.9"
 services:
   jmcomic-server:
     build:
