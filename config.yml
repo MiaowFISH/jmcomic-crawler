@@ -1,4 +1,25 @@
 server:
+  host: 0.0.0.0
+  port: 8000
+  data_dir: "./data"
+  static_route: "/artifacts"
+  cleanup_policy:
+    artifacts:
+      keep_last: 10
+      ttl_days: null
+  password:
+    length: 12
+    charset: "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#-_"
+  artifact_name:
+    # 制品命名规则：album_id | short_hash | random | date
+    rule: short_hash
+    short_hash:
+      length: 8
+    random:
+      length: 8
+      charset: "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    date:
+      format: "%Y%m%d"
 
 # JmComic settings
 jm_comic:
@@ -10,7 +31,7 @@ jm_comic:
     retry_times: 1
     postman:
       meta_data:
-        proxies: null # e.g., "http://127.0.0.1:7890" or "clash"
+        proxies: null # e.g., "http://127.0.0.1:7890"
     domain:
       html:
         - "jm18c-cvb.net"
@@ -19,4 +40,3 @@ jm_comic:
         - "jmcomic-zzz.one"
         - "jm18c-cvb.org"
         - "jmcomic-zzz.org"
-
