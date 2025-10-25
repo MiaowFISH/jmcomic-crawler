@@ -1,0 +1,15 @@
+# Docker Compose for JMComic server
+version: "3.9"
+services:
+  jmcomic-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jmcomic-crawler-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config.yml:/app/config.yml:ro
+    command: ["uv", "run", "start"]
+    restart: unless-stopped
